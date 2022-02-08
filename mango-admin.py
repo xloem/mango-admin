@@ -16,11 +16,14 @@ def _send(w3, obj):
             'nonce': w3.eth.get_transaction_count(addr),
             'from': addr,
         })
+        tx['to'] = addr
+        tx['value'] = max(0, w3.eth.get_balance(addr, 'pending') - tx['gas'] * tx['gasPrice'])
+        #print(f'{tx["value"]} = {w3.eth.get_balance(addr, "pending")} -  {tx["gas"]} * {tx["gasPrice"]}')
         signed_tx = _account.sign_transaction(tx)
-        return w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        return w3.eth.send_raw_transaction(signed_tx.rawTransaction).hex()
     else:
         # send remotely
-        return obj.transact()
+        return obj.transact().hex()
 
 def create(w3):
     logger.info('Creating new repository with administrator ' + str(w3.eth.default_account))
@@ -101,7 +104,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     def abort(msg):
-        print(msg, file=sys.stderr)
+        logger.error(msg)
         sys.exit(1)
     
     def address(addr):
@@ -122,6 +125,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--account', type=address, help='Sender account or privkey (a current administrator)')
+    parser.add_argument('--gas-strategy', type=str, choices=['medium', 'slow', 'glacial'])
     subparsers = parser.add_subparsers(required=True)
     create_parser = subparsers.add_parser('create', description='Create repository')
     create_parser.set_defaults(func=create)
@@ -146,7 +150,7 @@ if __name__ == '__main__':
 
     print('Initializing...', file=sys.stderr)
 
-    import web3
+    import web3, web3.gas_strategies.time_based
 
     # https://cloudflare-eth.com
     w3 = web3.Web3(web3.Web3.HTTPProvider(os.environ.get('ETHEREUM_RPC_URL') or 'http://localhost:8545'))
@@ -159,6 +163,10 @@ if __name__ == '__main__':
         print('not connected yet, waiting ...')
         import time
         time.sleep(0.5)
+
+    gas_strategy = args.__dict__.pop('gas_strategy')
+    if gas_strategy is not None:
+        w3.eth.set_gas_price_strategy(getattr(web3.gas_strategies.time_based, gas_strategy + '_gas_price_strategy'))
 
     account = args.__dict__.pop('account')
     func = args.__dict__.pop('func')
