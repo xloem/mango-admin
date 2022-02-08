@@ -4,13 +4,26 @@ import logging
 
 from contracts import repoABI, repoCode
 
-logger = logging.getLogger(__name__)
+_localaccts = {}
+logger = logging.getLogger('mango-admin')
+
+def _send(w3, obj):
+    if w3.eth.default_account in _localaccts:
+        # sign locally, send raw
+        acct = _localaccts[w3.eth.default_account]
+        addr = w3.eth.default_account
+        tx = obj.buildTransaction({'nonce': w3.eth.get_transaction_count(addr)})
+        signed_tx = acct.sign_transaction(tx)
+        return w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    else:
+        # send remotely
+        return obj.transact()
 
 def create(w3):
     logger.info('Creating new repository with administrator ' + str(w3.eth.default_account))
     ct = w3.eth.contract(abi=repoABI, bytecode=repoCode)
     constructor = ct.constructor()
-    transactionHash = constructor.transact()
+    transactionHash = _send(w3, constructor)
     logger.info('Sent transaction: ' + transactionHash)
     address = w3.eth.get_transaction_receipt(transactionHash)['contractAddress']
     logger.info('Repository created: ' + address)
@@ -51,7 +64,7 @@ def obsolete(w3, repo):
     logger.info('Marking ' + repo + ' as obsolete')
 
     ct = w3.eth.contract(address=repo, abi=repoABI)
-    transactionHash = ct.functions.setObsolete().call().transact()
+    transactionHash = _send(w3, ct.functions.setObsolete().call())
     logger.info('Sent transaction: ' + transactionHash)
     logger.warn("Don't forget to verify the tx is confirmed on-chain!")
     
@@ -61,7 +74,7 @@ def authorize(w3, repo, address, admin = False):
     logger.info('Authorizing ' + address + ' for ' + repo + ' as ' + ('committer', 'admin')[admin])
 
     ct = w3.eth.contract(address=repo, abi=repoABI)
-    transactionHash = ct.functions.authorize(address, admin).transact()
+    transactionHash = _send(w3, ct.functions.authorize(address, admin))
     logger.info('Sent transaction: ' + transactionHash)
     logger.warn("Don't forget to verify the tx is confirmed on-chain!")
 
@@ -71,7 +84,7 @@ def deauthorize(w3, repo, address, admin = True):
     logger.info('Deauthorizing ' + address + ' for ' + repo + ' as ' + ('committer', 'admin')[admin])
 
     ct = w3.eth.contract(address=repo, abi=repoABI)
-    transactionHash = ct.functions.deauthorize(address, admin).transact()
+    transactionHash = _send(w3, ct.functions.deauthorize(address, admin))
     logger.info('Sent transaction: ' + transactionHash)
     logger.warn("Don't forget to verify the tx is confirmed on-chain!")
 
@@ -82,35 +95,45 @@ def deauthorize(w3, repo, address, admin = True):
 if __name__ == '__main__':
     import argparse, sys
 
+    logging.basicConfig(level=logging.INFO)
+
     def abort(msg):
         print(msg, file=sys.stderr)
         sys.exit(1)
     
-    def validated_addr(addr):
+    def address(addr):
         addr = str(addr)
-        import web3
-        if not web3.isAddress(addr):
-            raise TypeError('Invalid address')
+        import web3, eth_account
+        if not web3.main.is_address(addr):
+            try:
+                account = eth_account.Account.from_key(addr)
+            except:
+                try:
+                    account = eth_account.Account.from_mnemonic(addr)
+                except:
+                    raise TypeError('Invalid address')
+            _localaccts[account.address] = account
+            return account.address
         return addr
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--account', type=validated_addr, help='Sender account (a current administrator)')
+    parser.add_argument('--account', type=address, help='Sender account or privkey (a current administrator)')
     subparsers = parser.add_subparsers(required=True)
     create_parser = subparsers.add_parser('create', description='Create repository')
     create_parser.set_defaults(func=create)
     status_parser = subparsers.add_parser('status', description='Check status of repository')
-    status_parser.add_argument('-R', '--repo', type=validated_addr, required=True, help='Repository address')
+    status_parser.add_argument('-R', '--repo', type=address, required=True, help='Repository address')
     status_parser.set_defaults(func=status)
     obsolete_parser = subparsers.add_parser('obsolete', description='Mark repository obsolete')
-    obsolete_parser.add_argument('-R', '--repo', type=validated_addr, required=True, help='Repository address')
+    obsolete_parser.add_argument('-R', '--repo', type=address, required=True, help='Repository address')
     obsolete_parser.set_defaults(func=obsolete)
     auth_parser = subparsers.add_parser('authorize', description='Authorize account with write access')
-    auth_parser.add_argument('-R', '--repo', type=validated_addr, required=True, help='Repository address')
+    auth_parser.add_argument('-R', '--repo', type=address, required=True, help='Repository address')
     auth_parser.add_argument('address', type=str)
     auth_parser.add_argument('--admin', type=bool, help='Treat as administrator')
     auth_parser.set_defaults(func=authorize)
     deauth_parser = subparsers.add_parser('deauthorize', description='Deauthorize account')
-    deauth_parser.add_argument('-R', '--repo', type=validated_addr, required=True, help='Repository address')
+    deauth_parser.add_argument('-R', '--repo', type=address, required=True, help='Repository address')
     deauth_parser.add_argument('address', type=str)
     deauth_parser.add_argument('--admin', type=bool, help='Treat as administrator')
     deauth_parser.set_defaults(func=deauthorize)
