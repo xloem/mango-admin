@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 import os, sys
 import logging
+import eth_account
 
 from contracts import repoABI, repoCode
 
-_localaccts = {}
+_account = None
 logger = logging.getLogger('mango-admin')
 
 def _send(w3, obj):
-    if w3.eth.default_account in _localaccts:
+    if _account is not None:
         # sign locally, send raw
-        acct = _localaccts[w3.eth.default_account]
-        addr = w3.eth.default_account
-        tx = obj.buildTransaction({'nonce': w3.eth.get_transaction_count(addr)})
-        signed_tx = acct.sign_transaction(tx)
+        addr = _account.address
+        tx = obj.buildTransaction({
+            'nonce': w3.eth.get_transaction_count(addr),
+            'from': addr,
+        })
+        signed_tx = _account.sign_transaction(tx)
         return w3.eth.send_raw_transaction(signed_tx.rawTransaction)
     else:
         # send remotely
@@ -103,7 +106,7 @@ if __name__ == '__main__':
     
     def address(addr):
         addr = str(addr)
-        import web3, eth_account
+        import web3
         if not web3.main.is_address(addr):
             try:
                 account = eth_account.Account.from_key(addr)
@@ -112,7 +115,8 @@ if __name__ == '__main__':
                     account = eth_account.Account.from_mnemonic(addr)
                 except:
                     raise TypeError('Invalid address')
-            _localaccts[account.address] = account
+            global _account
+            _account = account
             return account.address
         return addr
 
